@@ -102,7 +102,7 @@ Since I have a slightly custom setup for docker engine, I don't want to use any 
 
 The official repos "generate scripts" seem highly targeted to non-technical users.
 
-Additionally, the CF Tunnel related docs are a good primer, but not up no date for 2025:  
+Additionally, the CF Tunnel related docs are a good primer, but not up to date for 2025:  
 https://docs.btcpayserver.org/Docker/cloudflare-tunnel/
 
 

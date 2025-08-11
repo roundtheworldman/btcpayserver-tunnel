@@ -1,0 +1,171 @@
+---
+# BTCPAYSERVER-TUNNEL by @roundtheworldman
+# Designed for Cloudflare Tunnel and pruned BTC Node in the same docker network
+
+# notes on Payserver
+# Based on testing, it seems that some / all environment variables are not overriding config files.
+# Therefore we need to mount a volume with a settings config file.
+# Tread carefully
+
+services:
+  btcpayserver:
+    image: btcpayserver/btcpayserver:2.1.6  # check for linux/arm64
+    container_name: payserver
+    environment:
+      - TUNNEL_HOSTNAME=${TUNNEL_HOSTNAME}
+      - BTCPAY_PROTOCOL=http
+      - BTCPAY_HOST=btcpayserver:80
+      - BTCPAYGEN_ADDITIONAL_FRAGMENTS=opt-save-storage-xs
+      - BTCPAYGEN_LIGHTNING=lnd
+      - BTCPAYGEN_LIGHTNING_INTERNAL=lnd
+      - BTCPAYGEN_LIGHTNING_LND_CONFIG="type=lnd;server=payserver-lnd:10009;macaroonfilepath=/data/chain/bitcoin/mainnet/admin.macaroon;certthumbprint="
+      - BTCPAYGEN_CRYPTO1=btc
+      - NBITCOIN_NETWORK=mainnet
+      - BTCPAY_DATABASE=Postgres
+      - BTCPAY_POSTGRES=User ID=btcpayuser;Password=${POSTGRES_PASSWORD};Host=payserver-postgres;Port=5432;Database=btcpayserver;
+      - NBXPLORER_URL=http://payserver-nbxplorer:24444
+      - NBXPLORER_URI=http://payserver-nbxplorer:24444
+      - NBXPLORER_BTC_URL=http://payserver-nbxplorer:24444/btc
+      - NBXPLORER_APIKEY=${NBXPLORER_APIKEY}
+    expose:
+      - "80"
+    restart: unless-stopped
+    depends_on:
+      - postgres
+      - nbxplorer
+    networks:
+      - btcpayserver
+    volumes:
+      - ./payserver/settings.config:/datadir/Main/settings.config
+
+  cloudflared:
+    image: cloudflare/cloudflared:latest
+    container_name: payserver-cloudflared
+    depends_on:
+      - btcpayserver
+    command: tunnel --no-autoupdate run --token ${CLOUDFLARE_TUNNEL_TOKEN}
+    environment:
+      - TUNNEL_URL=http://payserver:80
+      - CLOUDFLARE_TUNNEL_TOKEN=${CLOUDFLARE_TUNNEL_TOKEN}
+      - REAL_IP_HEADER=Cf-Connecting-Ip
+    restart: unless-stopped
+    networks:
+      - btcpayserver
+
+# Postgres is a requirement for Payserver
+  postgres:
+    image: postgres:16
+    container_name: payserver-postgres
+    environment:
+      - POSTGRES_DB=btcpayserver
+      - POSTGRES_USER=btcpayuser
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    networks:
+      - btcpayserver
+
+# Notes on NBXplorer
+# Required by Payserver to watch addresses for specific invoices
+# If your btc node prunes too much history, then your invoices will not be able to be monitored correctly
+# At this time the nbxplorer image here seems to pull source code from the dgarage Github Org and repo:
+# https://github.com/dgarage/NBXplorer
+# the tags in the repo and the pushes in the docker hub image seem to match with regard to the dates and the times.
+
+# Additionally it seems that environment variables are not overriding configuration files for settings.
+# Therefore we need to mount a volume with a settings config file.
+# Tread carefully
+
+  nbxplorer:
+    image: nicolasdorier/nbxplorer:2.5.28 # this docker hub image seems to go to github repo for dgarage.
+    container_name: payserver-nbxplorer
+    environment:
+      - NBXPLORER_NETWORK=mainnet
+      - NBXPLORER_NOAUTH=1
+      - NBXPLORER_CHAINS=btc
+      - NBXPLORER_BTCRPCURL=http://payserver-bitcoin:43782
+      - NBXPLORER_POSTGRES=User ID=btcpayuser;Password=${POSTGRES_PASSWORD};Host=payserver-postgres;Port=5432;Database=btcpayserver;
+    expose:
+      - "24444"
+    restart: unless-stopped
+    networks:
+      - btcpayserver
+    depends_on:
+      bitcoin:
+        condition: service_healthy
+    volumes:
+      - ./nbxplorer/settings.config:/datadir/Main/settings.config
+
+  bitcoin:
+    image: dobtc/bitcoin:28.2 #always be sure image supports arm64
+    container_name: payserver-bitcoin
+    environment:
+      - BITCOIN_NETWORK=mainnet
+      - BITCOIN_RPCUSER=bitcoin
+      - BITCOIN_RPCPASSWORD=bitcoinpassword
+    expose:
+      - "43782"
+      - "28332"
+      - "28333"
+    command:
+      -printtoconsole
+      -rpcallowip=0.0.0.0/0
+      -rpcbind=0.0.0.0
+      -rpcport=43782
+      -rpcuser=bitcoin
+      -rpcpassword=bitcoinpassword
+      -server=1
+      -zmqpubrawblock=tcp://0.0.0.0:28332
+      -zmqpubrawtx=tcp://0.0.0.0:28333
+      -prune=15000
+    restart: unless-stopped
+    networks:
+      - btcpayserver
+    volumes:
+      - bitcoin_data:/home/bitcoin/.bitcoin
+    healthcheck:
+      test: ["CMD", "bitcoin-cli", "-rpcuser=bitcoin", "-rpcpassword=bitcoinpassword", "-rpcport=43782", "getblockchaininfo"]
+      interval: 5m
+      timeout: 2m
+      retries: 50
+
+  lnd:
+    image: lightninglabs/lnd:v0.19.2-beta #always be sure image supports arm64
+    container_name: payserver-lnd
+    command:
+      - --bitcoin.active
+      - --bitcoin.mainnet
+      - --bitcoin.node=bitcoind
+      - --bitcoind.rpchost=payserver-bitcoin:43782
+      - --bitcoind.rpcuser=bitcoin
+      - --bitcoind.rpcpass=bitcoinpassword
+      - --bitcoind.zmqpubrawblock=tcp://payserver-bitcoin:28332
+      - --bitcoind.zmqpubrawtx=tcp://payserver-bitcoin:28333
+      - --rpclisten=0.0.0.0:10009
+      - --restlisten=0.0.0.0:8080
+      - --listen=0.0.0.0:9735
+      - --datadir=/data
+      - --tlsextraip=0.0.0.0
+      - --tlsextradomain=payserver-lnd
+    volumes:
+      - lnd_data:/data
+      - ./lnd/lnd.conf:/root/.lnd/lnd.conf
+      - ./lnd/wallet-password:/root/.lnd/wallet-password
+    expose:
+      - "9735"   # Lightning P2P
+      - "10009"  # gRPC
+      - "8080"   # REST
+    restart: unless-stopped
+    networks:
+      - btcpayserver
+    depends_on:
+      - bitcoin
+
+volumes:
+  postgres_data:
+  lnd_data:
+  bitcoin_data:
+
+networks:
+  btcpayserver:

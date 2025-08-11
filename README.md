@@ -8,7 +8,7 @@ opinionated docker container deployment • btcpayserver with cloudflared • ar
 
 * alternatively, just curl or wget the docker-compose.yml file to the system that you want to deploy payserver on
 
-* `wget https://raw.github.com/path.... `
+* `wget https://raw.githubusercontent.com/roundtheworldman/btcpayserver-tunnel/refs/heads/master/docker-compose.yml`
 
 * Review the `.env-template` file.
 

@@ -34,7 +34,7 @@ docker compose up -d
 docker ps -a
 ```
 
-## Componets in this Deployment
+## components in this Deployment
 
 the first 2 componets are for the Payserver to be public reachable by admins, customers or billing systems.  
 
